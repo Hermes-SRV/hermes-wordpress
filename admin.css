@@ -1,0 +1,37 @@
+.form--input label {
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.form--input input,
+.form--input select {
+  margin-bottom: 16px;
+  min-width: 400px;
+}
+
+.form--input input[type='checkbox'] {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.form--input .description {
+  margin: -8px 0 16px;
+  max-width: 560px;
+}
+
+.hermes--form {
+  background: #fff;
+  border-radius: 8px;
+  padding: 32px;
+  margin: 16px 16px 16px 0;
+}
+
+.hermes--form h2 {
+  margin-top: 0;
+}
+
+.hermes--form .submit {
+  margin: 0;
+  padding: 0;
+}
