@@ -19,6 +19,7 @@ class WP_Error {
 }
 
 function add_action() {}
+function add_filter() {}
 function register_activation_hook() {}
 function __( $text ) { return $text; }
 function wp_parse_url( $url, $component = -1 ) { return parse_url( $url, $component ); }
@@ -115,5 +116,45 @@ expect_same( 'xChat', $sanitized['launcher_text'], 'stored text must be sanitize
 expect_same( 'auto', $sanitized['locale'], 'stored locale must be validated' );
 expect_same( 'standard', $sanitized['widget_type'], 'stored type must be validated' );
 expect_same( 'right', $sanitized['position'], 'stored position must be validated' );
+
+$asset_url = 'https://github.com/Hermes-SRV/hermes-wordpress/releases/download/v1.2.3/hermes-connector.zip';
+$release   = array(
+	'tag_name'     => 'v1.2.3',
+	'body'         => 'Notes',
+	'published_at' => '2026-11-03T00:00:00Z',
+	'assets'       => array(
+		array( 'name' => 'other.zip', 'browser_download_url' => 'https://github.com/Hermes-SRV/hermes-wordpress/releases/download/v1.2.3/other.zip' ),
+		array( 'name' => 'hermes-connector.zip', 'browser_download_url' => $asset_url ),
+	),
+);
+$parsed_release = $connector::parse_release( 200, json_encode( $release ) );
+expect_same( '1.2.3', $parsed_release['version'], 'release version must drop the v prefix' );
+expect_same( $asset_url, $parsed_release['package'], 'release package must be the asset' );
+expect_same( 'Notes', $parsed_release['changelog'], 'release notes must be kept' );
+
+$foreign = $release;
+$foreign['assets'][1]['browser_download_url'] = 'https://evil.example/hermes-connector.zip';
+expect_same( null, $connector::parse_release( 200, json_encode( $foreign ) ), 'package of another host must be rejected' );
+$other_repo = $release;
+$other_repo['assets'][1]['browser_download_url'] = 'https://github.com/attacker/hermes-wordpress/releases/download/v1.2.3/hermes-connector.zip';
+expect_same( null, $connector::parse_release( 200, json_encode( $other_repo ) ), 'package of another repository must be rejected' );
+$other_tag = $release;
+$other_tag['tag_name'] = 'v9.9.9';
+expect_same( null, $connector::parse_release( 200, json_encode( $other_tag ) ), 'package of another tag must be rejected' );
+expect_same( null, $connector::parse_release( 200, json_encode( array_merge( $release, array( 'prerelease' => true ) ) ) ), 'prerelease must be ignored' );
+expect_same( null, $connector::parse_release( 200, json_encode( array_merge( $release, array( 'draft' => true ) ) ) ), 'draft must be ignored' );
+expect_same( null, $connector::parse_release( 200, json_encode( array_merge( $release, array( 'tag_name' => 'latest' ) ) ) ), 'invalid tag must be ignored' );
+expect_same( null, $connector::parse_release( 200, json_encode( array_merge( $release, array( 'assets' => array() ) ) ) ), 'release without the asset must be ignored' );
+expect_same( null, $connector::parse_release( 404, '{}' ), 'missing release must return null' );
+expect_same( null, $connector::parse_release( 200, 'not json' ), 'invalid JSON must return null' );
+
+$update_data = $connector::update_data( $parsed_release );
+expect_same( '1.2.3', $update_data['version'], 'update data must use the release version' );
+expect_same( $asset_url, $update_data['package'], 'update data must use the release package' );
+$no_release = $connector::update_data( null );
+expect_same( $connector::VERSION, $no_release['version'], 'without a release the current version must be reported' );
+expect_same( '', $no_release['package'], 'without a release there must be no package' );
+
+expect_same( 1, preg_match( '/^ \\* Version:\s+' . preg_quote( $connector::VERSION, '/' ) . '$/m', file_get_contents( dirname( __DIR__ ) . '/hermes-connector.php' ) ), 'header version must equal the class version' );
 
 echo "Hermes connector tests passed\n";

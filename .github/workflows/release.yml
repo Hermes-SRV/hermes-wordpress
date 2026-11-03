@@ -1,0 +1,46 @@
+name: Build and release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check PHP syntax
+        run: find . -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Run tests
+        run: php tests/test-hermes-connector.php
+      - name: Check the tag version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(sed -n -E 's/^ \* Version: +(.+)$/\1/p' hermes-connector.php)"
+          test "$GITHUB_REF_NAME" = "v$version"
+      - name: Build the package
+        run: git archive --format=zip --prefix=hermes-connector/ -o hermes-connector.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermes-connector
+          path: hermes-connector.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: hermes-connector
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" hermes-connector.zip --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

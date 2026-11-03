@@ -4,12 +4,13 @@
  * Plugin URI:  https://github.com/Hermes-SRV/hermes-wordpress
  * Description: Connects WordPress to a Hermes web widget inbox through API v2 and identifies logged-in users. Based on the Chatwoot Plugin for WordPress.
  * Version:     1.0.0
- * Requires at least: 5.7
+ * Requires at least: 5.8
  * Requires PHP: 7.4
  * Author:      Hermes
  * Author URI:  https://github.com/Hermes-SRV
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
+ * Update URI:  https://github.com/Hermes-SRV/hermes-wordpress
  * Text Domain: hermes-connector
  */
 
@@ -28,6 +29,10 @@ final class Hermes_Connector {
 	public const INBOXES_TRANSIENT = 'hermes_connector_inboxes';
 	public const SEARCH_PATH = '/api/v2/inbox/web-widget/search';
 	public const IDENTIFIER_PREFIX = 'wordpress';
+	public const REPOSITORY = 'Hermes-SRV/hermes-wordpress';
+	public const RELEASE_ASSET = 'hermes-connector.zip';
+	public const RELEASE_TRANSIENT = 'hermes_connector_release';
+	public const SLUG = 'hermes-connector';
 
 	/** True while this class saves values that were already sanitized. */
 	private static $saving_sanitized = false;
@@ -80,6 +85,8 @@ final class Hermes_Connector {
 		add_action( 'admin_notices', array( self::class, 'render_upstream_notice' ) );
 		add_action( 'admin_post_hermes_connect', array( self::class, 'handle_connect' ) );
 		add_action( 'admin_post_hermes_select_inbox', array( self::class, 'handle_select_inbox' ) );
+		add_filter( 'update_plugins_github.com', array( self::class, 'filter_update' ), 10, 3 );
+		add_filter( 'plugins_api', array( self::class, 'filter_plugin_information' ), 10, 3 );
 	}
 
 	/** Copy the upstream plugin settings once. The upstream options stay unchanged. */
@@ -571,6 +578,117 @@ final class Hermes_Connector {
 		}
 
 		return $items;
+	}
+
+	/**
+	 * Convert the GitHub latest release response into update data.
+	 *
+	 * Auto-update runs this package on client sites, so the package must be the
+	 * release asset of this repository. Any other address returns null.
+	 *
+	 * @return array|null
+	 */
+	public static function parse_release( $status, $body ) {
+		$release = json_decode( (string) $body, true );
+		if ( 200 !== $status || ! is_array( $release ) || ! empty( $release['draft'] ) || ! empty( $release['prerelease'] ) ) {
+			return null;
+		}
+
+		$tag = (string) ( $release['tag_name'] ?? '' );
+		if ( ! preg_match( '/^v(\d+\.\d+\.\d+)$/', $tag, $matches ) ) {
+			return null;
+		}
+
+		$package = 'https://github.com/' . self::REPOSITORY . "/releases/download/{$tag}/" . self::RELEASE_ASSET;
+		foreach ( (array) ( $release['assets'] ?? array() ) as $asset ) {
+			if ( is_array( $asset ) && self::RELEASE_ASSET === ( $asset['name'] ?? '' ) && $package === ( $asset['browser_download_url'] ?? '' ) ) {
+				return array(
+					'version'   => $matches[1],
+					'package'   => $package,
+					'changelog' => (string) ( $release['body'] ?? '' ),
+					'published' => (string) ( $release['published_at'] ?? '' ),
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Build the data for the WordPress update check. Without a release, the
+	 * current version is returned so that the auto-update control stays visible.
+	 */
+	public static function update_data( $release ) {
+		return array(
+			'slug'         => self::SLUG,
+			'version'      => $release['version'] ?? self::VERSION,
+			'url'          => 'https://github.com/' . self::REPOSITORY,
+			'package'      => $release['package'] ?? '',
+			'requires'     => '5.8',
+			'requires_php' => '7.4',
+		);
+	}
+
+	/** Answer the WordPress update check for this plugin only. */
+	public static function filter_update( $update, $plugin_data, $plugin_file ) {
+		if ( plugin_basename( __FILE__ ) !== $plugin_file ) {
+			return $update;
+		}
+
+		return self::update_data( self::latest_release() );
+	}
+
+	/** Provide the content of the plugin details window. */
+	public static function filter_plugin_information( $result, $action, $args ) {
+		if ( 'plugin_information' !== $action || self::SLUG !== ( $args->slug ?? '' ) ) {
+			return $result;
+		}
+
+		$release = self::latest_release();
+		$data    = self::update_data( $release );
+
+		return (object) array(
+			'name'          => 'Hermes Connector',
+			'slug'          => self::SLUG,
+			'version'       => $data['version'],
+			'author'        => 'Hermes',
+			'homepage'      => $data['url'],
+			'requires'      => $data['requires'],
+			'requires_php'  => $data['requires_php'],
+			'download_link' => $data['package'],
+			'last_updated'  => $release['published'] ?? '',
+			'sections'      => array(
+				'description' => esc_html__( 'Connects WordPress to a Hermes web widget inbox and identifies logged-in users.', 'hermes-connector' ),
+				'changelog'   => wpautop( esc_html( $release['changelog'] ?? '' ) ),
+			),
+		);
+	}
+
+	/**
+	 * Read the latest release with a cache. GitHub limits unauthenticated
+	 * requests per IP address, and many sites can share one address.
+	 *
+	 * @return array|null
+	 */
+	private static function latest_release() {
+		$cached = get_transient( self::RELEASE_TRANSIENT );
+		if ( is_array( $cached ) ) {
+			return $cached['release'];
+		}
+
+		$response = wp_safe_remote_get(
+			'https://api.github.com/repos/' . self::REPOSITORY . '/releases/latest',
+			array(
+				'timeout'     => 10,
+				'redirection' => 0,
+				'headers'     => array( 'Accept' => 'application/vnd.github+json' ),
+			)
+		);
+		$release  = is_wp_error( $response ) ? null : self::parse_release( (int) wp_remote_retrieve_response_code( $response ), wp_remote_retrieve_body( $response ) );
+
+		set_transient( self::RELEASE_TRANSIENT, array( 'release' => $release ), $release ? 6 * HOUR_IN_SECONDS : HOUR_IN_SECONDS );
+
+		return $release;
 	}
 
 	/** Warn while the upstream plugin is active because it blocks this widget. */
